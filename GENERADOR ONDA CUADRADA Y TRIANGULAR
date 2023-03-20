@@ -1,0 +1,418 @@
+; Archivo: GENERADOR
+; Dispositivo: PIC16F887
+; Autor: CARLOS ESCOBAR
+; Compilador: pic-as (v2.4), MPLABX V6.05
+; 
+; Programa: GENERADOR DE FRECUENCIAS FINAL
+; Hardware: PUERTO B PUSH BUTTONS, PUERTO A,C,D Y E COMO SALIDAS 
+; 
+; Creado: 03/03/2023
+; Última modificación: 20/03/2023
+
+PROCESSOR 16F887
+#include <xc.inc> 
+    
+;configuration word 1
+    CONFIG FOSC=INTRC_NOCLKOUT //OSCILADOR INTERNO SIN SALIDAS
+    CONFIG WDTE=OFF // WDT DISABLE (REINICIO REPETITIVO DE PIC)
+    CONFIG PWRTE=OFF // PWRT ENABLE (ESPERA DE 72MS AL INICIAR)
+    CONFIG MCLRE=OFF //EL PIN DE MCLR SE USA COMO I/O
+    CONFIG CP=OFF //SIN PROTECCIÓN DE CÓDIGO
+    CONFIG CPD=OFF //SIN PROTECCIÓN DE DATOS
+    
+    CONFIG BOREN=OFF //SIN REINICIO CUANDO EL V DE ALIMENTACIÓN BAJA A 4V
+    CONFIG IESO=OFF // REINICIO SIN CAMBIO DE RELOJ INTERNO A EXTERNO
+    CONFIG FCMEN=OFF // CAMBIO DE RELOJ EXTERNO A INTERNO EN CASO DE FALLO
+    CONFIG LVP=ON //PROGRAMACIÓN EN BAJO VOLTAJE PERMITIDA
+    
+
+;configuration word 2
+CONFIG WRT=OFF
+CONFIG BOR4V=BOR40V
+    
+PSECT udata_bank0 ;se apartan los bytes en el banco
+   selector: DS 1; selector para aumentar las frecuencias o disminuirlas
+   selec_hz: DS 1; selector si es en Hz o Khz
+   selec_onda: DS 1; variable para seleccionar la onda 
+   cont_small: DS 1
+    
+   //variables para la onda triangular
+   selec_tr: DS 1
+   desborde_tr: DS 1
+   ;variables para la onda cuadrada
+   selec_sqr: DS 1
+   desborde_sqr: DS 1
+    
+    
+PSECT resVect, class=CODE, abs, delta=2
+ ORG 00h
+ resetVec:
+    PAGESEL main 
+    goto main ;inicio del programa
+//FIN DEL VECTOR PARA PODER CORRER EL PROGRAMA
+    
+    
+ PSECT code, delta=2, abs
+ 
+ ;--------------------interrupciones------------------------------------
+
+ 
+ ORG 100h
+ 
+ main:
+    call config_io
+    call config_tmr0
+    call config_osc
+    banksel PORTA
+    
+ loop:
+    btfss PORTB, 0; SI EL PUERTO B ESTÁ ENCENDIO SKIPEAR LA SIGUIENTE INSTRUCCIÓN
+    call inc_sel ; si está apagado, significa que se debe incrementar
+    
+    btfss PORTB, 1; SI EL PUERTO B ESTÁ ENCENDIO SKIPEAR LA SIGUIENTE INSTRUCCIÓN
+    call dec_sel ; si está apagado, significa que se debe incrementar
+    
+    ;botones para cambiar de HZ a kHZ
+    btfss PORTB, 2; SI EL PUERTO B ESTÁ ENCENDIO SKIPEAR LA SIGUIENTE INSTRUCCIÓN
+    call sel_hz ; si está apagado, significa que se debe incrementar
+    
+    btfss PORTB, 3; SI EL PUERTO B ESTÁ ENCENDIO SKIPEAR LA SIGUIENTE INSTRUCCIÓN
+    call sel_khz ; si está apagado, significa que se debe incrementar
+    ; fin de los botones
+    btfss PORTB, 4; si el puerto B en el pin 4 está encendido skipear la siguiente instrucción
+    call sel_cuadrada ; selecciona la onda triangular
+    btfss PORTB, 5; si el puerto B en el pin 5 está encendido skipear la siguiente instrucción
+    call sel_triangular ; selecciona la onda triangular
+    btfsc selec_onda, 0; si el selector de onda está en 0, skipeará la onda cuadrada
+    call onda_cuadrada
+    btfsc selec_onda, 1 ; si el selector de onda está en 0 en el pin 1, seleccionará la onda triangular
+    call onda_triangular
+    movf selector, W
+    call tabla; se llama a la tabla para mostrar en los displays
+    movwf PORTA
+    goto loop
+    
+//CONFIGURACIÓN DE PUERTOS
+config_io:
+    ;ENTRADAS DIGITALES
+    BANKSEL ANSEL
+    CLRF ANSELH
+    CLRF ANSEL
+    
+    //PUERTOS DE ENTRADAS Y SALIDAS
+    BANKSEL TRISA
+    CLRF TRISA
+    BSF TRISB, 0
+    BSF TRISB, 1
+    BSF TRISB, 2
+    BSF TRISB, 3
+    BSF TRISB, 4
+    BSF TRISB, 5
+    CLRF TRISC
+    CLRF TRISD
+    CLRF TRISE
+    
+    //LIMPIEZA DE PUERTOS
+    BANKSEL PORTA
+    CLRF PORTA
+    CLRF PORTB
+    CLRF PORTC
+    CLRF PORTD
+    CLRF PORTE
+    
+    //ACTIVA LOS PULL UPS DENTRO DEL PUERTO B
+    BANKSEL OPTION_REG
+    bcf OPTION_REG, 7
+    movlw 00111111B
+    movwf WPUB
+    
+    //ASIGNA LA ESCALA INICIAL EN HZ---------------------------
+    banksel PORTE
+    bsf selec_hz, 0
+    bsf selec_onda,0
+    movf selec_hz, W
+    movwf PORTE
+    //FIN DE LA ASIGNACIÓN DE LA ESCALA PRINCIPAL----------------
+    
+    call encender_displays
+    
+    RETURN
+    //FIN DE CONFIGURACIÓN DE PUERTOS
+    
+    //------CONFIGURACIÓN DEL RELOJ---------------
+config_osc:
+    banksel OSCCON ;SE MUEVE AL BANCO DONDE SE ENCUENTRA OSCCON PARA EL TIMER
+    bsf IRCF2
+    bcf IRCF1
+    bcf IRCF0 ;100 QUE SIGNIFICA 1mHZ
+    bsf SCS  ; SE ENCIENDE EL TEMPORIZADOR INTERNO
+    return
+//--------------FIN DE LA CONGIRUACIÓN DEL RELOJ*-------------
+    
+    //SUBRUTINAS DE SELECCIÓN DEL SELECTOR
+    inc_sel:
+	call delay_small
+	btfss PORTB, 0; si el puerto B está en 0 skipear el incremento
+	goto $-1
+	incf selector ; incrementa si está en 0
+
+	return
+	
+   dec_sel:
+	call delay_small
+	btfss PORTB, 1; si el puerto B está en 0 skipear el incremento
+	goto $-1
+	decf selector ; decrementa si está en 0
+	return
+   // FIN DE LAS SUBRUTINAS DEL SELECTOR
+   
+  //SUBRUTINAS DE SELECCIÓN DEL SELECTOR de hz
+    sel_hz:
+	call delay_small
+	btfss PORTB, 2; si el puerto B está en 0 skipear el incremento
+	goto $-1
+	bsf selec_hz, 0
+	bcf selec_hz, 1
+	bcf PORTE, 1
+	bsf PORTE, 0
+	return
+	
+   sel_khz:
+	call delay_small
+	btfss PORTB, 3; si el puerto B está en 0 skipear el incremento
+	goto $-1
+	bcf selec_hz, 0
+	bsf selec_hz, 1
+	bcf PORTE, 0
+	bsf PORTE, 1
+	return
+   // FIN DE LAS SUBRUTINAS DEL SELECTOR de hz
+   
+   //--------SUBRUTINA DE SELECTOR DE ONDA---------------------------------------
+   sel_cuadrada:; selector de la onda cuadrada
+	call delay_small
+	btfss PORTB, 4
+	goto $-1
+	bcf selec_onda, 1
+	bsf selec_onda, 0
+	bcf PORTE, 2
+	;movf selec_onda, W
+	return
+	
+    sel_triangular:; selector de la onda triangular
+	call delay_small
+	btfss PORTB, 5
+	goto $-1
+	bcf selec_onda, 0
+	bsf selec_onda, 1
+	bsf PORTE, 2
+	return
+	
+   //FIN DE LA SUBRUTINA---------------------------------------------------------
+    
+; fin de las subrutinas
+    
+;-----------------------ONDA cuadrada----------------------------------------------------------------	
+   onda_cuadrada: 
+    call desborde_contador_cuadrada
+    incf selec_sqr
+    movf selec_sqr, W
+    call tabla_sqr
+    movwf PORTC; suma 31 al puerto C
+    btfss T0IF
+    goto $-1
+    call reinicio_tmr0
+    return    
+ 
+  desborde_contador_cuadrada:; función que sirve para verificar si la onda está en su máximo o mínimo
+    movlw 15
+    movwf desborde_sqr; carga el valor de 14 a la variable para ver si el contador se desbordó
+    movf selec_sqr, W; carga el valor del contador para la tabla al acumulador
+    subwf desborde_sqr,W
+    btfsc STATUS, 2
+    clrf selec_sqr; reinicia el contador para la tabla
+    return
+;---------------------------FIN DE LA ONDA TRIANGULAR-------------------------------------------------
+   
+;-----------------------ONDA TRIANGULAR----------------------------------------------------------------	
+   onda_triangular: 
+    call desborde_contador_triangular
+    incf selec_tr
+    movf selec_tr, W
+    call tabla_tr
+    movwf PORTC; suma 31 al puerto C
+    btfss T0IF
+    goto $-1
+    call reinicio_tmr0
+    return    
+ 
+  desborde_contador_triangular:; función que sirve para verificar si la onda está en su máximo o mínimo
+    movlw 16
+    movwf desborde_tr; carga el valor de 14 a la variable para ver si el contador se desbordó
+    movf selec_tr, W; carga el valor del contador para la tabla al acumulador
+    subwf desborde_tr,W
+    btfsc STATUS, 2
+    clrf selec_tr; reinicia el contador para la tabla
+    return
+;---------------------------FIN DE LA ONDA TRIANGULAR-------------------------------------------------
+    
+//FIN DE LA RUTINA---------------------------------------------------------------
+
+delay_small:
+    movlw   150 ;(1)
+    movwf   cont_small ;(1)
+    decfsz  cont_small, 1 ;1(2)
+    goto    $-1 ;(2)
+    return ;(2)
+    
+//RUTINA DE CONFIGURACIÓN DEL TIMER 0-------------------------------------------
+config_tmr0:
+    BANKSEL OPTION_REG
+    bcf OPTION_REG, 5; reloj interno
+    bsf OPTION_REG, 4; transición de alto a bajo
+    bcf OPTION_REG, 3 ; preescaler activado
+    
+    ;preescaler predeterminado
+    bcf OPTION_REG, 2
+    bsf OPTION_REG, 1
+    bsf OPTION_REG, 0;preescaler de 16
+    
+    BANKSEL PORTA
+    call reinicio_tmr0
+    return
+    
+  reinicio_tmr0:
+    bcf T0IF; limpia la b+andera de interrupción
+    movf selector, W
+    
+    ;VERIFICACIÓN SI SE ELIGIÓ KHZ O HZ
+    btfsc selec_hz, 0; si el bit 0 está en 0, skipeará la siguiente instrucción
+    call tabla_hz
+    btfsc selec_hz, 1; si el bit 1 está en 0, skipeará la siguiente instrucción
+    call tabla_khz
+    movwf TMR0;carga el valor al tmr 0
+    
+    return
+// FIN DE LA RUTINA DE CONFIGURACIÓN--------------------------------------------
+    
+    //TABLAS PARA CARGAR EL VALOR AL TIMER 0
+   tabla_hz: 
+    CLRF PCLATH
+    BSF PCLATH, 0
+    ANDLW 0X0F
+    ADDWF PCL ;PCL + PCLATH (W con PCL) PCL adquiere ese nuevo valor y salta a esa linea
+    ;valores que regresa
+    retlw 1101000B ;104 7Hz
+    retlw 10011011B ;155 10Hz
+    retlw 10110100B ;180 13Hz
+    retlw 11000011B ;195 17Hz
+    retlw 11001101B ;205 20Hz
+    retlw 11010101B ;213 24Hz
+    retlw 11011010B ;218 27Hz
+    retlw 11011110B ;222 300Hz
+    RETURN
+    
+    tabla_khz: 
+    CLRF PCLATH
+    BSF PCLATH, 0
+    ANDLW 0X0F
+    ADDWF PCL ;PCL + PCLATH (W con PCL) PCL adquiere ese nuevo valor y salta a esa linea
+    ;valores que regresa
+    retlw 242; 70 Hz
+    retlw 244; 80 Hz
+    retlw 246; 90 HZ
+    retlw 248; 115 Hz
+    retlw 250; 145 HZ
+    retlw 251; 170 Hz
+    retlw 252; 200 Hz
+    retlw 253; 220 HZ
+    RETURN
+    //FIN DE LAS TABLAS PARA CARGAR EL VALOR AL TIMER 0
+   
+    //TABLAS PARA LOS DISPLAYS
+    tabla: 
+    CLRF PCLATH
+    BSF PCLATH, 0
+    ANDLW 0X0F
+    ADDWF PCL ;PCL + PCLATH (W con PCL) PCL adquiere ese nuevo valor y salta a esa linea
+    ;valores que regresa
+    retlw 11111101B ;0
+    retlw 01100001B ;1
+    retlw 11011011B ;2
+    retlw 11110011B ;3
+    retlw 01100111B ;4
+    retlw 10110111B ;5
+    retlw 10111111B ;6
+    retlw 11100001B ;7
+    retlw 11111111B ;8
+    retlw 11110111B ;9
+    
+    //FIN DE LAS TABLAS
+    
+    //TABLAS PARA LA ONDA TRIANGULAR
+    tabla_tr: 
+    CLRF PCLATH
+    BSF PCLATH, 0
+    ANDLW 0X0F
+    ADDWF PCL ;PCL + PCLATH (W con PCL) PCL adquiere ese nuevo valor y salta a esa linea
+    ;valores que regresa
+    retlw 0;0
+    retlw 32;1
+    retlw 64;2
+    retlw 96;3
+    retlw 128;4
+    retlw 160;5
+    retlw 192;6
+    retlw 224;7
+    retlw 255;8
+    retlw 224;9
+    retlw 192;10
+    retlw 160;11
+    retlw 128;12
+    retlw 96;13
+    retlw 64;14
+    retlw 32;15
+    retlw 0; 16
+    //FIN DE LA TABLA DE LA ONDA TRIANGULAR
+    //TABLAS PARA LA ONDA CUADRADA
+    tabla_sqr: 
+    CLRF PCLATH
+    BSF PCLATH, 0
+    ANDLW 0X0F
+    ADDWF PCL ;PCL + PCLATH (W con PCL) PCL adquiere ese nuevo valor y salta a esa linea
+    ;valores que regresa
+    retlw 0;0
+    retlw 0;1
+    retlw 0;2
+    retlw 0;3
+    retlw 0;4
+    retlw 0;5
+    retlw 0;6
+    retlw 0;7
+    retlw 255;8
+    retlw 255;9
+    retlw 255;10
+    retlw 255;11
+    retlw 255;12
+    retlw 255;13
+    retlw 255;14
+    retlw 255;15
+    //FIN DE LA TABLA DE LA ONDA CUADRADA
+
+    encender_displays:
+     movlw 11111101B
+     movwf PORTD
+     return
+     
+     
+ 
+ END
+
+ 
+
+
+
+
+
+
+
